@@ -1,8 +1,5 @@
-#include <SoftwareSerial.h>                   //importuj bibliotekę SoftwareSerial
-//ACCELEROMETER/GYROSCOPE LIBS
-#include "I2Cdev.h"
+#include <SoftwareSerial.h>
 #include "MPU6050_6Axis_MotionApps20.h"
-#include "Wire.h"
 
 SoftwareSerial Bluetooth(0, 1);
 MPU6050 mpu(0x68);
@@ -11,16 +8,14 @@ MPU6050 mpu(0x68);
 #define BT_END_SIGN '>'
 #define BT_BREAK_SIGN ';'
 
-// F1 - little finger, F2 - ring f., F3 - middle f.
-// F4 - index f., F5 - thumb
 ///////////////////////////   FLEX SENSORS PINS   ///////////////////////////
-const int FLEX_PIN[] = { 6, 3, 2, 1, 0};
+const int FLEX_PIN[] = { 6, 3, 2, 1, 0};    // thumb, index, middle, ring, pinky
 float d_flex_sensor[5];
 int i_flex_min[5];
 int i_flex_max[5];
 
 //////////////////////////////   MOTORS PINS   //////////////////////////////
-const int MOTOR_PIN[] = { 8, 4, 5, 7, 9};
+const int MOTOR_PIN[] = { 8, 4, 5, 7, 9};   //// thumb, index, middle, ring, pinky
 float d_motor_power = 0.05;
 
 /////////////////////////   ACCELEROMETER/GYROSCOPE   ////////////////////////
@@ -34,8 +29,6 @@ Quaternion q_gyro;      // [w, x, y, z]
 float euler[3];         // [psi, theta, phi]    Euler angle container
 float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
 VectorFloat v3_gravity;
-bool b_calibrate = false;
-bool b_calibration_successful = false;
 
 bool dmpReady = false;  // set true if DMP init was successful
 uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
@@ -48,6 +41,7 @@ uint8_t fifoBuffer[64]; // FIFO storage buffer
 String s_send_data;
 String s_recived_data = "0.00;0.00;0.00;0.00;0.00;0";
 float d_recived_data[6];
+bool b_calibrate = true;
 
 
 // ================================================================
@@ -63,11 +57,7 @@ void dmpDataReady() {
 // ================================================================
 void setup()
 {
-  Wire.begin();
-  // Wire.setClock(400000);
-
   Serial.begin(38400);
-  Bluetooth.begin(38400);  //ZMIENIĆ NA 30K -50K
   pinMode(INTERRUPT_PIN, INPUT);
   for (int i = 0 ; i < 5 ; i++)
   {
@@ -109,15 +99,15 @@ void SetupMPU()
 // ================================================================
 void loop()
 {
-  ReceiveData();
-  if (b_calibrate || Serial.read()=='a')
+  if (b_calibrate)
+  {
     Calibrate();
-  
+  }
   AccelGyroUpdate();
-  FlexSensorsRead();
+  FlexSensorsUpdate();
   SendData();
-  //PrintMPU(3);
-  //MotorsControl();
+  ReceiveData();
+ // MotorsController();
 }
 
 void ReceiveData()
@@ -173,33 +163,28 @@ void SendData()
   _sDataToSend += ';';
   _sDataToSend += q_gyro.w;
   _sDataToSend += ';';
-  _sDataToSend += v3_acc.x-v3_gravity.x;
+  _sDataToSend += v3_acc.x;
   _sDataToSend += ';';
-  _sDataToSend += v3_acc.y-v3_gravity.y;
+  _sDataToSend += v3_acc.y;
   _sDataToSend += ';';
-  _sDataToSend += v3_acc.z-v3_gravity.z;
+  _sDataToSend += v3_acc.z;
   _sDataToSend += ';';
   for (int i = 0; i < 5; i++)
   {
     _sDataToSend += d_flex_sensor[i];
     _sDataToSend += ';';
   }
-  _sDataToSend += b_calibration_successful;
+  _sDataToSend += true;
   _sDataToSend += BT_END_SIGN;
-  if (b_calibration_successful)
-    {
-      b_calibration_successful = false;
-      b_calibrate = false;
-    }
   Serial.println(_sDataToSend);
 }
 
-void FlexSensorsRead()
+void FlexSensorsUpdate()
 { 
   for (int i = 0; i < 5 ; i++)
   {
     d_flex_sensor[i] = analogRead(FLEX_PIN[i]);
-    CalibrateFlexSensors(d_flex_sensor[i], i);
+    CalibrateFlexSensor(d_flex_sensor[i], i);
     d_flex_sensor[i] = (d_flex_sensor[i] - i_flex_min[i]) / (i_flex_max[i] - i_flex_min[i]);
     if(d_flex_sensor[i]<0)
       d_flex_sensor[i]=0;
@@ -208,38 +193,26 @@ void FlexSensorsRead()
   }
 }
 
-void CalibrateFlexSensors(float dFlexSensor, int iNumber)
-{ for(int i=0; i<5;i++)
- { 
-    i_flex_min[i]=100;
-    i_flex_max[i]=250;
- }
-/*  if (dFlexSensor < i_flex_min[iNumber])
-    i_flex_min[iNumber] = dFlexSensor;
-  if (dFlexSensor > i_flex_max[iNumber])
-    i_flex_max[iNumber] = dFlexSensor;*/
+void CalibrateFlexSensor(float dFlexSensor, int iNumber)
+{ 
+    if (dFlexSensor < i_flex_min[iNumber] && dFlexSensor > 50)
+      i_flex_min[iNumber] = dFlexSensor;
+      String s = (String)dFlexSensor;
+      s+=" ";
+      Serial.print(s);
+      i_flex_max[iNumber] = dFlexSensor;
 }
 
 void Calibrate()
 {
-  SetupMPU();       // Gyro calibration
-  v3_acc.x = 0;
-  v3_acc.y = 0;
-  v3_acc.z = 0;
+  SetupMPU();
   mpu.dmpGetQuaternion(&q_gyro, fifoBuffer);
   mpu.dmpGetAccel(&v3_now_acc, fifoBuffer);
   mpu.dmpGetGravity(&v3_gravity, &q_gyro);
   mpu.dmpGetLinearAccel(&v3_linear_acc, &v3_now_acc, &v3_gravity);
   mpu.dmpGetLinearAccelInWorld(&v3_world_acc, &v3_linear_acc, &q_gyro);
- for(int i=0; i<5;i++)
- { 
-    i_flex_min[i]=100;
-    i_flex_max[i]=250;
- }
-     // mpu.dmpGetEuler(euler, &q_gyro);
-     // mpu.dmpGetYawPitchRoll(ypr, &q_gyro, &v3_gravity);
-  v3_last_acc=v3_world_acc;
-  b_calibration_successful = true;
+  
+  b_calibrate = false;
 }
 
 void AccelGyroUpdate()
@@ -275,39 +248,14 @@ void AccelGyroUpdate()
       mpu.dmpGetQuaternion(&q_gyro, fifoBuffer);
       mpu.dmpGetAccel(&v3_now_acc, fifoBuffer);
       mpu.dmpGetGravity(&v3_gravity, &q_gyro);
-    mpu.dmpGetLinearAccel(&v3_linear_acc, &v3_now_acc, &v3_gravity);
-    mpu.dmpGetLinearAccelInWorld(&v3_world_acc, &v3_linear_acc, &q_gyro);
-    v3_acc=v3_world_acc;
- /*   String a1="";
-    a1+=v3_linear_acc.x;
-    a1+="\t";    
-    a1+=v3_linear_acc.y;
-    a1+="\t";    
-    a1+=v3_linear_acc.z;
-    a1+="\t";    
-    a1+=v3_world_acc.x;
-    a1+="\t";    
-    a1+=v3_world_acc.y;
-    a1+="\t";    
-    a1+=v3_world_acc.z;
-    a1+="\t";    
-    a1+=v3_gravity.x;
-    a1+="\t";    
-    a1+=v3_gravity.y;
-    a1+="\t";    
-    a1+=v3_gravity.z;
-    Serial.println(a1);
-     /* v3_acc.x = v3_now_acc.x - v3_last_acc.x;
-      v3_acc.y = v3_now_acc.y - v3_last_acc.y;
-      v3_acc.z = v3_now_acc.z - v3_last_acc.z;
-      v3_last_acc.x = v3_now_acc.x;
-      v3_last_acc.y = v3_now_acc.y;
-      v3_last_acc.z = v3_now_acc.z;*/
+      mpu.dmpGetLinearAccel(&v3_linear_acc, &v3_now_acc, &v3_gravity);
+      mpu.dmpGetLinearAccelInWorld(&v3_world_acc, &v3_linear_acc, &q_gyro);
+      v3_acc=v3_world_acc;
     }
   }
 }
 
-void MotorsControl()
+void MotorsController()
 {
   if (d_motor_power < 0.95)
     d_motor_power += 0.1;
@@ -337,44 +285,5 @@ float fGetMotorSetting(int iStartPosition)
     iStartPosition++;
   }
   return _sTemp.toFloat();
-}
-
-void PrintMPU(int iPrintNumber)
-{
-  int _iPrintNumber = iPrintNumber;
-  if (_iPrintNumber == 0) {
-    Serial.print("ACCELERATION:\t");
-    Serial.print(v3_acc.x);
-    Serial.print("\t");
-    Serial.print(v3_acc.y);
-    Serial.print("\t");
-    Serial.println(v3_acc.z);
-  }
-  if (_iPrintNumber == 1) {
-    Serial.print("GRAVITY:\t");
-    Serial.print(v3_acc.x);
-    Serial.print("\t");
-    Serial.print(v3_acc.y);
-    Serial.print("\t");
-    Serial.println(v3_acc.z);
-  }
-  if (_iPrintNumber == 2) {
-    Serial.print("GYRO:\t");
-    Serial.print(q_gyro.x);
-    Serial.print("\t");
-    Serial.print(q_gyro.y);
-    Serial.print("\t");
-    Serial.print(q_gyro.z);
-    Serial.print("\t");
-    Serial.println(q_gyro.w);
-  }
-  if (_iPrintNumber == 3) {
-    Serial.print("EULER (IN DEGREES)\t");
-    Serial.print(euler[0] * 180 / M_PI);
-    Serial.print("\t");
-    Serial.print(euler[1] * 180 / M_PI);
-    Serial.print("\t");
-    Serial.println(euler[2] * 180 / M_PI);
-  }
 }
 
