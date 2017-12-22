@@ -25,7 +25,7 @@ VectorInt16 v3_last_acc;
 VectorInt16 v3_now_acc;
 VectorInt16 v3_linear_acc;
 VectorInt16 v3_world_acc;
-Quaternion q_gyro;      // [w, x, y, z]
+Quaternion quat;      // [w, x, y, z]
 float euler[3];         // [psi, theta, phi]    Euler angle container
 float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
 VectorFloat v3_gravity;
@@ -38,9 +38,7 @@ uint16_t fifoCount;     // count of all bytes currently in FIFO
 uint8_t fifoBuffer[64]; // FIFO storage buffer
 
 //BLUETOOTH
-String s_send_data;
-String s_recived_data = "0.00;0.00;0.00;0.00;0.00;0";
-float d_recived_data[6];
+float d_recived_data[6] = {0, 0, 0, 0, 0, 0};
 bool b_calibrate = true;
 
 
@@ -64,10 +62,8 @@ void setup()
     pinMode(FLEX_PIN[i], INPUT);
     pinMode(MOTOR_PIN[i], OUTPUT);
     d_flex_sensor[i] = 0;
-    i_flex_min[i] = 1000;
-    i_flex_max[i] = 0;
   }
-  SetupMPU();
+  CalibrateController();
 }
 
 void SetupMPU()
@@ -82,7 +78,7 @@ void SetupMPU()
   mpu.setYAccelOffset(-378);
   mpu.setZAccelOffset(1319);
 
-  if (devStatus == 0) // make sure it worked (returns 0 if so)
+  if (devStatus == 0)
   {
     mpu.setDMPEnabled(true);
     attachInterrupt(0, dmpDataReady, RISING);
@@ -99,14 +95,14 @@ void SetupMPU()
 // ================================================================
 void loop()
 {
+  ReceiveData();
   if (b_calibrate)
   {
-    Calibrate();
+    CalibrateController();
   }
   AccelGyroUpdate();
   FlexSensorsUpdate();
   SendData();
-  ReceiveData();
  // MotorsController();
 }
 
@@ -126,23 +122,21 @@ void ReceiveData()
     }
     if (_sReceivedData.length() > 0)
     {
-      s_recived_data = _sReceivedData;
-      ConvertRecivedData();
-      Serial.println("RECEIVED DATA: " + _sReceivedData);
+      ConvertRecivedData(_sReceivedData);
     }
   }
 }
 
-void ConvertRecivedData()
+void ConvertRecivedData(String sReceivedData)
 {
   String _sTemp;
   int j = 0;
   for (int i = 0; i < 6 ; i++)
   {
     _sTemp = "";
-    while (s_recived_data[j] != BT_BREAK_SIGN && j < s_recived_data.length())
+    while (sReceivedData[j] != BT_BREAK_SIGN && j < sReceivedData.length())
     {
-      _sTemp += s_recived_data[j];
+      _sTemp += sReceivedData[j];
       j++;
     }
     d_recived_data[i] = _sTemp.toFloat();
@@ -155,13 +149,13 @@ void SendData()
 {
   String _sDataToSend = "";
   _sDataToSend += BT_BEGIN_SIGN;
-  _sDataToSend += q_gyro.x;
+  _sDataToSend += quat.x;
   _sDataToSend += ';';
-  _sDataToSend += q_gyro.y;
+  _sDataToSend += quat.y;
   _sDataToSend += ';';
-  _sDataToSend += q_gyro.z;
+  _sDataToSend += quat.z;
   _sDataToSend += ';';
-  _sDataToSend += q_gyro.w;
+  _sDataToSend += quat.w;
   _sDataToSend += ';';
   _sDataToSend += v3_acc.x;
   _sDataToSend += ';';
@@ -190,28 +184,29 @@ void FlexSensorsUpdate()
       d_flex_sensor[i]=0;
     else if(d_flex_sensor[i]>1)
       d_flex_sensor[i]=1;
+    int temp = d_flex_sensor[i]/0.05;
+    d_flex_sensor[i] = temp * 0.05;
   }
 }
 
 void CalibrateFlexSensor(float dFlexSensor, int iNumber)
 { 
-    if (dFlexSensor < i_flex_min[iNumber] && dFlexSensor > 50)
-      i_flex_min[iNumber] = dFlexSensor;
+    if (dFlexSensor * 1.1 < i_flex_min[iNumber])
+      i_flex_min[iNumber] = dFlexSensor * 1.1;
       String s = (String)dFlexSensor;
       s+=" ";
-      Serial.print(s);
-      i_flex_max[iNumber] = dFlexSensor;
+    if (dFlexSensor * 0.9 > i_flex_max[iNumber])
+      i_flex_max[iNumber] = dFlexSensor * 0.9;
 }
 
-void Calibrate()
+void CalibrateController()
 {
   SetupMPU();
-  mpu.dmpGetQuaternion(&q_gyro, fifoBuffer);
-  mpu.dmpGetAccel(&v3_now_acc, fifoBuffer);
-  mpu.dmpGetGravity(&v3_gravity, &q_gyro);
-  mpu.dmpGetLinearAccel(&v3_linear_acc, &v3_now_acc, &v3_gravity);
-  mpu.dmpGetLinearAccelInWorld(&v3_world_acc, &v3_linear_acc, &q_gyro);
-  
+  for (int i = 0 ; i < 5 ; i++)
+  {
+    i_flex_min[i] = 1000;
+    i_flex_max[i] = 0;
+  }
   b_calibrate = false;
 }
 
@@ -245,11 +240,11 @@ void AccelGyroUpdate()
       // (this lets us immediately read more without waiting for an interrupt)
       fifoCount -= packetSize;
 
-      mpu.dmpGetQuaternion(&q_gyro, fifoBuffer);
+      mpu.dmpGetQuaternion(&quat, fifoBuffer);
       mpu.dmpGetAccel(&v3_now_acc, fifoBuffer);
-      mpu.dmpGetGravity(&v3_gravity, &q_gyro);
+      mpu.dmpGetGravity(&v3_gravity, &quat);
       mpu.dmpGetLinearAccel(&v3_linear_acc, &v3_now_acc, &v3_gravity);
-      mpu.dmpGetLinearAccelInWorld(&v3_world_acc, &v3_linear_acc, &q_gyro);
+      mpu.dmpGetLinearAccelInWorld(&v3_world_acc, &v3_linear_acc, &quat);
       v3_acc=v3_world_acc;
     }
   }
@@ -257,33 +252,6 @@ void AccelGyroUpdate()
 
 void MotorsController()
 {
-  if (d_motor_power < 0.95)
-    d_motor_power += 0.1;
-  else
-    d_motor_power = 0.05;
-  SetMotorState(MOTOR_PIN[0], fGetMotorSetting(0)); //0 * 5 + 1
-  SetMotorState(MOTOR_PIN[1], fGetMotorSetting(2));
-  SetMotorState(MOTOR_PIN[2], fGetMotorSetting(6));
-  SetMotorState(MOTOR_PIN[3], fGetMotorSetting(11));
-  SetMotorState(MOTOR_PIN[4], fGetMotorSetting(16));
+  for(int i = 0; i < 5; i++)
+    analogWrite(MOTOR_PIN[i], d_recived_data[i]*255);
 }
-
-void SetMotorState(int iMotorPin, float dMotorSetting)
-{
-  if (dMotorSetting >= d_motor_power)
-    digitalWrite(iMotorPin, HIGH);
-  else
-    digitalWrite(iMotorPin, LOW);
-}
-
-float fGetMotorSetting(int iStartPosition)
-{
-  String _sTemp;
-  while (s_recived_data[iStartPosition] != BT_BREAK_SIGN && iStartPosition < s_recived_data.length())
-  {
-    _sTemp += s_recived_data[iStartPosition];
-    iStartPosition++;
-  }
-  return _sTemp.toFloat();
-}
-
