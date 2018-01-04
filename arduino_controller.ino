@@ -162,13 +162,11 @@ void SendData()
   _sDataToSend += v3_acc.y;
   _sDataToSend += ';';
   _sDataToSend += v3_acc.z;
-  _sDataToSend += ';';
   for (int i = 0; i < 5; i++)
   {
-    _sDataToSend += d_flex_sensor[i];
     _sDataToSend += ';';
+    _sDataToSend += d_flex_sensor[i];
   }
-  _sDataToSend += true;
   _sDataToSend += BT_END_SIGN;
   Serial.println(_sDataToSend);
 }
